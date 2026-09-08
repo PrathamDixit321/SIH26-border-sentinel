@@ -38,33 +38,75 @@ Most existing CCTV-AI systems detect *that* something/someone is in frame. Borde
 | Frontend | React |
 
 ## 📂 Project Structure
-border-sentinel/
 
-├── pipeline.py # Core CV pipeline: alignment, change detection, classification
-
-├── step1_yolo_test.py # Standalone YOLOv8 sanity-check script
-
-├── requirements.txt # Python dependencies
-
-├── dashboard/ # React dashboard (frontend)
-
+```
+SIH26-border-sentinel/
+├── backend/
+│   ├── app/
+│   │   ├── main.py            # FastAPI REST & WebSocket server
+│   │   ├── models.py          # Pydantic data schemas
+│   │   ├── storage.py         # Alert store & telemetry persistence
+│   │   └── streamer.py        # Tactical live MJPEG video streamer
+│   ├── snapshots/             # Forensic captures and alert snapshots
+│   ├── sample_data/           # Seed datasets and DB storage
+│   ├── requirements.txt       # Backend dependencies
+│   └── test_api.py            # Automated backend endpoint verification
+├── dashboard/                 # React Defense C2 Dashboard (Vite + Tailwind + Lucide)
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── TopNav.jsx     # DEFCON threat level, clock, and audio siren
+│   │   │   ├── VideoFeed.jsx  # Live stream with overlays & camera switcher
+│   │   │   ├── AlertFeed.jsx  # Real-time incident triage and search
+│   │   │   ├── ExplainabilityModal.jsx # Forensic Dossier (Key Differentiator)
+│   │   │   └── MetricsBar.jsx # False-alarm suppression & telemetry counters
+│   │   └── App.jsx
+│   └── package.json
+├── contracts/
+│   ├── sample_alerts.json     # Golden Day-1 sample JSON contract
+│   ├── ALERT_SCHEMA.md        # Partner API documentation & copy-paste snippets
+│   └── mock_pipeline_feed.py  # Mock pipeline alert generator
+├── pipeline.py                # Core CV pipeline (alignment, change detection, classification, auto-API dispatch)
+├── step1_yolo_test.py         # YOLOv8 test script
+├── run_demo.ps1               # One-click full-stack launcher (Backend + Dashboard)
+├── requirements.txt           # CV pipeline dependencies
 └── README.md
+```
 
-## 🚀 Getting Started
+## 🚀 Quickstart & One-Click Launch
 
+### Option 1: Run Everything in One Command (Recommended)
+```powershell
+./run_demo.ps1
+```
+This automatically launches:
+- **FastAPI Backend:** [http://localhost:8000](http://localhost:8000) (Interactive Swagger Docs: [http://localhost:8000/docs](http://localhost:8000/docs))
+- **React C2 Dashboard:** [http://localhost:5173](http://localhost:5173)
+- **Live Surveillance Stream:** [http://localhost:8000/api/stream](http://localhost:8000/api/stream)
+
+---
+
+### Option 2: Manual Start
+
+#### 1. Start Backend:
 ```bash
-# Clone the repo
-git clone https://github.com/PrathamDixit321/SIH26-border-sentinel.git
-cd border-sentinel
+cd backend
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-# Install dependencies
-pip install -r requirements.txt
+#### 2. Start Dashboard:
+```bash
+cd dashboard
+npm install
+npm run dev
+```
 
-# Run the smoke test (no video needed)
-python3 pipeline.py
+#### 3. Run Pipeline with Auto-Dispatch to Dashboard:
+```bash
+# Synthetic test (no video required):
+python pipeline.py
 
-# Run on a real video file
-python3 pipeline.py path/to/video.mp4
+# On real test footage:
+python pipeline.py "Komal 1.mp4"
 ```
 
 ## 🎥 Demo
