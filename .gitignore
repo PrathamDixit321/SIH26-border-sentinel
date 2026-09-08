@@ -1,0 +1,37 @@
+# Video formats (exclude large test clips)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.flv
+
+# Specific test recordings
+Komal 1.mp4
+Komal 2.mp4
+Komal 3.mp4
+Yash Raj 1.mp4
+Yash Raj 2.mp4
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Model weights and runs
+*.pt
+*.onnx
+runs/
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
