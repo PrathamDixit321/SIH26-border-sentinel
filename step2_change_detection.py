@@ -94,6 +94,14 @@ def main(
     print(f"Sampling at {output_fps:.1f} FPS (every {frame_interval} source frames).")
     print("Green boxes are changed regions. Press Q to quit preview mode.")
 
+    window_name = "Stage 2 - Change Detection Surveillance Monitor"
+    if preview:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        disp_w = min(1440, width * 3)
+        disp_h = int(height * (disp_w / (width * 3)))
+        cv2.resizeWindow(window_name, disp_w, disp_h)
+        print("Live preview window opened. Controls: [SPACE] Pause/Resume, [Q] Quit preview.")
+
     source_frame_index = 0
     processed_frames = 0
     frames_with_changes = 0
@@ -148,9 +156,18 @@ def main(
             print(f"Source frame {source_frame_index} ({source_frame_index / before_fps:.2f}s): {region_summary}")
 
         if preview:
-            cv2.imshow("Stage 2 - Change detection", combined)
-            if cv2.waitKey(max(1, int(1000 / output_fps))) & 0xFF == ord("q"):
-                break
+            try:
+                cv2.imshow(window_name, combined)
+                key = cv2.waitKey(max(1, int(1000 / output_fps))) & 0xFF
+                if key == ord("q"):
+                    print("\n[INFO] Playback preview closed by user.")
+                    break
+                elif key == ord(" "):
+                    print("\n[PAUSED] Press any key to resume...")
+                    cv2.waitKey(-1)
+            except cv2.error:
+                preview = False
+
         processed_frames += 1
         source_frame_index += 1
 
@@ -158,7 +175,10 @@ def main(
     after_cap.release()
     writer.release()
     if preview:
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
     print(f"\nSaved {processed_frames} sampled frames to: {output}")
     print(f"Frames with changes: {frames_with_changes} | Total detected regions: {total_regions}")
 
@@ -168,7 +188,8 @@ if __name__ == "__main__":
     parser.add_argument("before_video", help="Path to the before/reference video")
     parser.add_argument("after_video", help="Path to the after video")
     parser.add_argument("--output", default="outputs/change_detection_preview.mp4", help="Preview video path")
-    parser.add_argument("--preview", action="store_true", help="Also show the preview live")
+    parser.add_argument("--preview", action="store_true", dest="preview", default=True, help="Show live popup preview window (default: True)")
+    parser.add_argument("--no-preview", action="store_false", dest="preview", help="Disable live popup preview window (save video only)")
     parser.add_argument("--threshold", type=int, default=35, help="Pixel difference threshold (default: 35)")
     parser.add_argument("--min-area", type=int, default=500, help="Minimum contour area in pixels (default: 500)")
     parser.add_argument("--sample-fps", type=float, default=3.0, help="Frames per second to process (default: 3)")

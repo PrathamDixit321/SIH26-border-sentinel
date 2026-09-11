@@ -1,4 +1,6 @@
-# Video formats (exclude large test clips)
+# ==========================================
+# Video formats (Exclude all video files)
+# ==========================================
 *.mp4
 *.avi
 *.mov
@@ -6,31 +8,65 @@
 *.webm
 *.flv
 
-# Specific test recordings
+# Specific video test recordings
 Komal 1.mp4
 Komal 2.mp4
 Komal 3.mp4
 Yash Raj 1.mp4
 Yash Raj 2.mp4
 
-# Python cache and compiled files
+# ==========================================
+# Image / Picture formats (Exclude all pics)
+# ==========================================
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.bmp
+*.tiff
+*.gif
+*.ico
+*.svg
+
+# Exclude generated snapshot crops and visual preview directories
+outputs/alerts/*.jpg
+outputs/alerts/*.png
+outputs/*.mp4
+outputs/*.jpg
+outputs/*.png
+
+# Allow alerts.json to be tracked
+!outputs/alerts.json
+!alerts/alerts.json
+
+# ==========================================
+# Model weights & training runs
+# ==========================================
+*.pt
+*.onnx
+*.engine
+*.weights
+runs/
+
+# ==========================================
+# Python cache & compiled files
+# ==========================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 
-# Model weights and runs
-*.pt
-*.onnx
-runs/
-
-# Environments
+# ==========================================
+# Virtual environments
+# ==========================================
 .venv/
 venv/
 ENV/
 env/
 
+# ==========================================
 # IDE and OS files
+# ==========================================
 .vscode/
 .idea/
 .DS_Store

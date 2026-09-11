@@ -68,26 +68,53 @@ def is_affine_sane(M: np.ndarray | None, width: int, height: int) -> bool:
 
 
 def apply_transform(
-    img: np.ndarray, transform_type: str, matrix: np.ndarray, target_w: int, target_h: int
+    img: np.ndarray,
+    transform_type: str,
+    matrix: np.ndarray,
+    target_w: int,
+    target_h: int,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value: tuple[int, int, int] = (0, 0, 0),
 ) -> np.ndarray:
-    """Apply either a perspective or affine warp."""
+    """Apply either a perspective or affine warp cleanly without repeating edge pixels."""
     if transform_type == "H":
         return cv2.warpPerspective(
-            img, matrix, (target_w, target_h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+            img, matrix, (target_w, target_h), flags=cv2.INTER_LINEAR, borderMode=border_mode, borderValue=border_value
         )
     elif transform_type == "M":
         return cv2.warpAffine(
-            img, matrix, (target_w, target_h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+            img, matrix, (target_w, target_h), flags=cv2.INTER_LINEAR, borderMode=border_mode, borderValue=border_value
         )
     return img
 
 
-def align_after_to_before(before_bgr: np.ndarray, after_bgr: np.ndarray):
-    """Warp an after frame into the before frame's perspective with robust ORB matching.
+def compute_valid_overlap_mask(
+    transform_type: str, matrix: np.ndarray, target_w: int, target_h: int, margin: int = 12
+) -> np.ndarray:
+    """Return a binary mask of pixels that genuinely originate from the transformed after-frame."""
+    ones = np.ones((target_h, target_w), dtype=np.uint8) * 255
+    if transform_type == "H":
+        mask = cv2.warpPerspective(
+            ones, matrix, (target_w, target_h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
+        )
+    else:
+        mask = cv2.warpAffine(
+            ones, matrix, (target_w, target_h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
+        )
+    if margin > 0:
+        kernel = np.ones((margin, margin), dtype=np.uint8)
+        mask = cv2.erode(mask, kernel)
+    return mask
 
-    Enforces geometric sanity checks on homography (preventing vanishing-line zoom and blur)
-    and falls back to Partial Affine or temporal persistence when features drop due to occlusion.
-    Returns (aligned_frame, number_of_matches, number_of_inliers).
+
+def align_after_to_before_with_mask(
+    before_bgr: np.ndarray, after_bgr: np.ndarray
+) -> tuple[np.ndarray, int, int, np.ndarray]:
+    """Warp after_bgr into before_bgr perspective with clean seamless blending.
+
+    Returns (clean_aligned_frame, num_matches, num_inliers, valid_overlap_mask).
+    Non-overlapping margins are seamlessly filled with reference pixels instead of
+    streaked BORDER_REPLICATE stripes to prevent broken pixels and false contours.
     """
     global _LAST_VALID_TRANSFORM
     target_h, target_w = before_bgr.shape[:2]
@@ -103,9 +130,12 @@ def align_after_to_before(before_bgr: np.ndarray, after_bgr: np.ndarray):
     def fallback(good_count: int, inlier_count: int):
         if _LAST_VALID_TRANSFORM is not None:
             ttype, tmat = _LAST_VALID_TRANSFORM
-            aligned = apply_transform(after_bgr, ttype, tmat, target_w, target_h)
-            return aligned, good_count, inlier_count
-        return after_bgr, good_count, inlier_count
+            warped = apply_transform(after_bgr, ttype, tmat, target_w, target_h)
+            vmask = compute_valid_overlap_mask(ttype, tmat, target_w, target_h)
+            clean = np.where(vmask[:, :, None] > 0, warped, before_bgr)
+            return clean, good_count, inlier_count, vmask
+        full_mask = np.ones((target_h, target_w), dtype=np.uint8) * 255
+        return after_bgr, good_count, inlier_count, full_mask
 
     if before_des is None or after_des is None:
         return fallback(0, 0)
@@ -119,7 +149,6 @@ def align_after_to_before(before_bgr: np.ndarray, after_bgr: np.ndarray):
     if len(good_matches) < MIN_GOOD_MATCHES:
         return fallback(len(good_matches), 0)
 
-    # Source points are from after frame; destination points are before frame.
     source_points = np.float32([after_kp[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
     destination_points = np.float32([before_kp[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
@@ -134,16 +163,12 @@ def align_after_to_before(before_bgr: np.ndarray, after_bgr: np.ndarray):
     inlier_ratio_h = inliers_h / len(good_matches) if good_matches else 0.0
     if inliers_h >= MIN_INLIERS and inlier_ratio_h >= 0.18 and is_homography_sane(homography, target_w, target_h):
         _LAST_VALID_TRANSFORM = ("H", homography)
-        aligned = cv2.warpPerspective(
-            after_bgr,
-            homography,
-            (target_w, target_h),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE,
-        )
-        return aligned, len(good_matches), inliers_h
+        warped = apply_transform(after_bgr, "H", homography, target_w, target_h)
+        vmask = compute_valid_overlap_mask("H", homography, target_w, target_h)
+        clean = np.where(vmask[:, :, None] > 0, warped, before_bgr)
+        return clean, len(good_matches), inliers_h, vmask
 
-    # 2. Try Partial Affine (rotation, translation, scale - cannot explode into vanishing lines)
+    # 2. Try Partial Affine (rotation, translation, scale)
     M, inlier_mask_a = cv2.estimateAffinePartial2D(
         source_points,
         destination_points,
@@ -153,17 +178,19 @@ def align_after_to_before(before_bgr: np.ndarray, after_bgr: np.ndarray):
     inliers_a = int(inlier_mask_a.sum()) if inlier_mask_a is not None else 0
     if inliers_a >= 12 and is_affine_sane(M, target_w, target_h):
         _LAST_VALID_TRANSFORM = ("M", M)
-        aligned = cv2.warpAffine(
-            after_bgr,
-            M,
-            (target_w, target_h),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE,
-        )
-        return aligned, len(good_matches), inliers_a
+        warped = apply_transform(after_bgr, "M", M, target_w, target_h)
+        vmask = compute_valid_overlap_mask("M", M, target_w, target_h)
+        clean = np.where(vmask[:, :, None] > 0, warped, before_bgr)
+        return clean, len(good_matches), inliers_a, vmask
 
-    # 3. Features degraded/occluded: gracefully use temporal persistence
+    # 3. Graceful fallback on occlusion
     return fallback(len(good_matches), max(inliers_h, inliers_a))
+
+
+def align_after_to_before(before_bgr: np.ndarray, after_bgr: np.ndarray) -> tuple[np.ndarray, int, int]:
+    """Backwards-compatible wrapper returning (aligned_frame, num_matches, num_inliers)."""
+    aligned, matches, inliers, _ = align_after_to_before_with_mask(before_bgr, after_bgr)
+    return aligned, matches, inliers
 
 
 def labeled_panel(frame: np.ndarray, label: str) -> np.ndarray:
@@ -209,7 +236,13 @@ def main(before_path: str, after_path: str, output_path: str, preview: bool, sam
     print(f"Before: {before_path} ({before_fps:.2f} FPS)")
     print(f"After:  {after_path} ({after_fps:.2f} FPS)")
     print(f"Sampling at {output_fps:.1f} FPS (every {frame_interval} source frames).")
-    print("Aligning matching frame numbers. Press Q to quit preview mode.")
+    window_name = "Stage 1 - Two-Video Alignment Monitor"
+    if preview:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        disp_w = min(1440, width * 3)
+        disp_h = int(height * (disp_w / (width * 3)))
+        cv2.resizeWindow(window_name, disp_w, disp_h)
+        print("Live preview window opened. Controls: [SPACE] Pause/Resume, [Q] Quit preview.")
 
     source_frame_index = 0
     processed_frames = 0
@@ -239,9 +272,18 @@ def main(before_path: str, after_path: str, output_path: str, preview: bool, sam
         if processed_frames % 30 == 0:
             print(f"Source frame {source_frame_index}: {matches} matches, {inliers} homography inliers")
         if preview:
-            cv2.imshow("Stage 1 - Two-video alignment", preview_frame)
-            if cv2.waitKey(max(1, int(1000 / output_fps))) & 0xFF == ord("q"):
-                break
+            try:
+                cv2.imshow(window_name, preview_frame)
+                key = cv2.waitKey(max(1, int(1000 / output_fps))) & 0xFF
+                if key == ord("q"):
+                    print("\n[INFO] Playback preview closed by user.")
+                    break
+                elif key == ord(" "):
+                    print("\n[PAUSED] Press any key to resume...")
+                    cv2.waitKey(-1)
+            except cv2.error:
+                preview = False
+
         processed_frames += 1
         source_frame_index += 1
 
@@ -249,7 +291,10 @@ def main(before_path: str, after_path: str, output_path: str, preview: bool, sam
     after_cap.release()
     writer.release()
     if preview:
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
     print(f"Saved {processed_frames} sampled preview frame(s) to: {output}")
 
 
@@ -258,7 +303,8 @@ if __name__ == "__main__":
     parser.add_argument("before_video", help="Path to the before/reference video")
     parser.add_argument("after_video", help="Path to the after video")
     parser.add_argument("--output", default="outputs/alignment_preview.mp4", help="Preview video path")
-    parser.add_argument("--preview", action="store_true", help="Also show the preview live")
+    parser.add_argument("--preview", action="store_true", dest="preview", default=True, help="Show live popup preview window (default: True)")
+    parser.add_argument("--no-preview", action="store_false", dest="preview", help="Disable live popup preview window (save video only)")
     parser.add_argument("--sample-fps", type=float, default=3.0, help="Frames per second to process (default: 3)")
     arguments = parser.parse_args()
     main(arguments.before_video, arguments.after_video, arguments.output, arguments.preview, arguments.sample_fps)
