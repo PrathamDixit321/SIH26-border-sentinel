@@ -65,9 +65,13 @@ SIH26-border-sentinel/
 │   ├── sample_alerts.json     # Golden Day-1 sample JSON contract
 │   ├── ALERT_SCHEMA.md        # Partner API documentation & copy-paste snippets
 │   └── mock_pipeline_feed.py  # Mock pipeline alert generator
-├── pipeline.py                # Core CV pipeline (alignment, change detection, classification, auto-API dispatch)
+├── step1_two_video_alignment.py # Stage 1: Robust homography & partial affine alignment (anti-blur/anti-zoom)
+├── step2_change_detection.py    # Stage 2: Mutual field of view difference detection & live preview
+├── step3_yolo_overlap.py        # Stage 3: YOLOv8 target detection + changed region overlap
+├── step4_classifier_alerts.py   # Stage 4: Explainable Human vs Natural Classifier & Live C2 Alert Engine
+├── pipeline.py                # Core consecutive-frame CV pipeline with auto-API dispatch
 ├── step1_yolo_test.py         # YOLOv8 test script
-├── run_demo.ps1               # One-click full-stack launcher (Backend + Dashboard)
+├── run_demo.ps1               # One-click unified full-stack launcher (Backend + Dashboard + CV Pipeline)
 ├── requirements.txt           # CV pipeline dependencies
 └── README.md
 ```
@@ -76,7 +80,11 @@ SIH26-border-sentinel/
 
 ### Option 1: Run Everything in One Command (Recommended)
 ```powershell
+# Launch Backend + Dashboard
 ./run_demo.ps1
+
+# Or launch Backend + Dashboard + Stage 4 CV Pipeline simultaneously:
+./run_demo.ps1 -RunPipeline -BeforeVideo "Yash Raj 1.mp4" -AfterVideo "Yash Raj 2.mp4"
 ```
 This automatically launches:
 - **FastAPI Backend:** [http://localhost:8000](http://localhost:8000) (Interactive Swagger Docs: [http://localhost:8000/docs](http://localhost:8000/docs))
@@ -89,8 +97,7 @@ This automatically launches:
 
 #### 1. Start Backend:
 ```bash
-cd backend
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 #### 2. Start Dashboard:
@@ -100,12 +107,21 @@ npm install
 npm run dev
 ```
 
-#### 3. Run Pipeline with Auto-Dispatch to Dashboard:
+#### 3. Run Stage 4 Computer Vision Pipeline (Full Two-Video Analysis):
+```bash
+# Analyze two surveillance videos with live popup and real-time C2 Dashboard forwarding:
+python step4_classifier_alerts.py "Yash Raj 1.mp4" "Yash Raj 2.mp4"
+
+# Or run in headless mode:
+python step4_classifier_alerts.py "Yash Raj 1.mp4" "Yash Raj 2.mp4" --no-preview
+```
+
+#### 4. (Optional) Run Consecutive-Frame Single Video Pipeline:
 ```bash
 # Synthetic test (no video required):
 python pipeline.py
 
-# On real test footage:
+# On single video test footage:
 python pipeline.py "Komal 1.mp4"
 ```
 

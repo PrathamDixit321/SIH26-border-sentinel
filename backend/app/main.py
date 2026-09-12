@@ -1,18 +1,18 @@
-﻿import os
+import os
 import json
 import base64
 import random
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, status
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Query, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from .models import Alert, AlertCreate, AlertAcknowledge, SystemStats
 from .storage import store
-from .streamer import mjpeg_stream
+from .streamer import mjpeg_stream, stream_generator
 
 app = FastAPI(
     title="Border Sentinel AI — Surveillance & Alert Ingestion API",
@@ -169,6 +169,20 @@ def get_live_stream(camera_id: str = "CAM-01"):
         mjpeg_stream(camera_id=camera_id),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
+
+@app.post("/api/stream/frame")
+async def ingest_stream_frame(request: Request):
+    """
+    Ingest live JPEG frame from the CV pipeline and update active live stream.
+    """
+    try:
+        body = await request.body()
+        if body:
+            stream_generator.update_live_frame(body)
+            return {"status": "FRAME_ACCEPTED", "bytes": len(body)}
+    except Exception as err:
+        return {"status": "ERROR", "detail": str(err)}
+    return {"status": "NO_DATA"}
 
 @app.post("/api/simulate-threat")
 async def simulate_threat():

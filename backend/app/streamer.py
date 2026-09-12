@@ -1,4 +1,4 @@
-﻿import io
+import io
 import time
 import math
 from datetime import datetime
@@ -11,8 +11,19 @@ class VideoStreamGenerator:
         self.frame_count = 0
         self.target_x = 100.0
         self.target_dir = 1.0
+        self.latest_live_frame: bytes = None
+        self.last_live_timestamp: float = 0.0
+
+    def update_live_frame(self, frame_bytes: bytes):
+        """Update live camera frame directly from CV pipeline."""
+        self.latest_live_frame = frame_bytes
+        self.last_live_timestamp = time.time()
 
     def generate_frame(self, camera_id: str = "CAM-01") -> bytes:
+        # If active real-time CV pipeline is feeding frames, return live frame
+        if self.latest_live_frame and (time.time() - self.last_live_timestamp) < 3.5:
+            return self.latest_live_frame
+
         self.frame_count += 1
         t = time.time()
 

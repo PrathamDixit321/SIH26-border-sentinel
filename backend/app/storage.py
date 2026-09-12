@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import threading
 from datetime import datetime
@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 from .models import Alert, AlertCreate, SystemStats
 
 DATA_FILE = os.path.join(os.path.dirname(__file__), "..", "sample_data", "alerts_db.json")
+OUTPUTS_ALERTS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "outputs", "alerts.json")
 SEED_FILE = os.path.join(os.path.dirname(__file__), "..", "sample_data", "sample_alerts.json")
 
 class AlertStore:
@@ -14,26 +15,60 @@ class AlertStore:
         self.alerts: List[Dict[str, Any]] = []
         self._load_or_seed()
 
+    def _normalize_alert(self, a: Dict[str, Any], idx: int) -> Dict[str, Any]:
+        """Normalize alert fields to ensure compatibility with Alert schema."""
+        category = a.get("category", "PEDESTRIAN")
+        label = a.get("label", "HUMAN")
+        return {
+            "alert_id": a.get("alert_id") or f"ALT-LOG-{a.get('frame', idx):04d}-{idx:02d}",
+            "timestamp": a.get("timestamp") or datetime.now().isoformat(),
+            "camera_id": a.get("camera_id") or "CAM-01",
+            "sector": a.get("sector") or "Sector 4 (North Ridge Fence)",
+            "threat_level": a.get("threat_level") or ("CRITICAL" if category == "PEDESTRIAN" else "HIGH"),
+            "label": label,
+            "category": category,
+            "confidence": float(a.get("confidence", 0.90)),
+            "bbox": a.get("bbox") or [100, 100, 50, 100],
+            "zone": a.get("zone") or "Red Zone Alpha (Tripwire TW-01)",
+            "snapshot_url": a.get("snapshot_url") or (
+                "/snapshots/sample_vehicle_02.jpg" if category == "VEHICLE" else "/snapshots/sample_intruder_01.jpg"
+            ),
+            "status": a.get("status") or "UNACKNOWLEDGED",
+            "reason": a.get("reason") or "Intrusion detected in surveillance field",
+            "metrics": a.get("metrics") or {},
+            "xai_breakdown": a.get("xai_breakdown") or {
+                "shape_analysis": f"Shape morphology classified as {category}",
+                "motion_profile": "Linear trajectory across mutual field of view",
+                "frame_alignment": "ORB alignment active",
+                "zone_intrusion": "Crossing perimeter tripwire",
+                "environmental_verdict": "CONFIRMED INTRUSION"
+            },
+            "environmental_noise_filtered": a.get("environmental_noise_filtered", False)
+        }
+
     def _load_or_seed(self):
         with self._lock:
             # Try to load existing db
             if os.path.exists(DATA_FILE):
                 try:
                     with open(DATA_FILE, "r", encoding="utf-8") as f:
-                        self.alerts = json.load(f)
+                        raw = json.load(f)
+                        self.alerts = [self._normalize_alert(a, i) for i, a in enumerate(raw)]
                         return
                 except Exception as err:
                     print(f"[WARN] Failed to load {DATA_FILE}: {err}")
 
-            # Seed from seed file if available
-            if os.path.exists(SEED_FILE):
+            # Seed from outputs/alerts.json or seed file if available
+            seed_source = OUTPUTS_ALERTS_FILE if os.path.exists(OUTPUTS_ALERTS_FILE) else SEED_FILE
+            if os.path.exists(seed_source):
                 try:
-                    with open(SEED_FILE, "r", encoding="utf-8") as f:
-                        self.alerts = json.load(f)
+                    with open(seed_source, "r", encoding="utf-8") as f:
+                        raw = json.load(f)
+                        self.alerts = [self._normalize_alert(a, i) for i, a in enumerate(raw)]
                         self._persist_unlocked()
                         return
                 except Exception as err:
-                    print(f"[WARN] Failed to load seed file {SEED_FILE}: {err}")
+                    print(f"[WARN] Failed to load seed source {seed_source}: {err}")
 
             self.alerts = []
 

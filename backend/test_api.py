@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from starlette.testclient import TestClient
 from backend.app.main import app
 
@@ -25,5 +32,10 @@ print(f'[PASS] /api/simulate-threat -> Created alert {new_alert["alert_id"]} ({n
 res_ack = client.post(f'/api/alerts/{new_alert["alert_id"]}/acknowledge', json={'operator_notes': 'QRF Team Alpha Dispatched'})
 assert res_ack.status_code == 200
 print(f'[PASS] /api/alerts/acknowledge -> {res_ack.json()["status"]}')
+
+# Test live stream frame ingestion
+res_frame = client.post('/api/stream/frame', content=b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb')
+assert res_frame.status_code == 200
+print('[PASS] /api/stream/frame -> Ingested live frame successfully!')
 
 print('\nALL BACKEND API TESTS PASSED 100%!')

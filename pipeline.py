@@ -36,6 +36,21 @@ def send_alert_to_api(payload, api_url="http://localhost:8000/api/alerts"):
         pass
 
 
+def send_frame_to_stream(frame, stream_url="http://localhost:8000/api/stream/frame"):
+    """Non-blocking live frame forwarding to FastAPI live stream."""
+    try:
+        import requests
+        h, w = frame.shape[:2]
+        if w > 960:
+            scale = 960.0 / w
+            frame = cv2.resize(frame, (960, int(h * scale)), interpolation=cv2.INTER_AREA)
+        ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
+        if ret:
+            requests.post(stream_url, data=buf.tobytes(), timeout=0.08)
+    except Exception:
+        pass
+
+
 def align_frames(prev_gray, curr_gray):
     """Align curr to prev using Partial Affine (rotation + translation)
     to handle camera jitter without projective shear distortion."""
@@ -450,6 +465,7 @@ def process_video(path, show_live=True):
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
 
         # 5. Live HUD and interactive window
+        send_frame_to_stream(display_frame)
         if show_live:
             # Top HUD bar
             cv2.rectangle(display_frame, (0, 0), (display_frame.shape[1], 34), (25, 25, 25), -1)
