@@ -27,6 +27,7 @@ from step1_two_video_alignment import (
     reset_alignment_state,
 )
 
+import time
 import base64
 
 # Target surveillance categories (COCO: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck)
@@ -38,20 +39,42 @@ COLOR_HUMAN_VEHICLE = (0, 215, 255)          # Amber/Gold - Vehicle Alert
 COLOR_NATURAL_TREES = (0, 230, 0)           # Emerald Green - Natural Foliage (Filtered)
 COLOR_STATIC = (140, 140, 140)              # Muted Slate - Ambient / Static
 
+_BACKEND_ONLINE: bool | None = None
+_LAST_BACKEND_CHECK: float = 0.0
+
+
+def is_backend_online(api_url: str = "http://localhost:8000/api/health") -> bool:
+    """Check if FastAPI backend is online, caching result so offline mode never lags."""
+    global _BACKEND_ONLINE, _LAST_BACKEND_CHECK
+    now = time.time()
+    if _BACKEND_ONLINE is not None and (now - _LAST_BACKEND_CHECK) < 15.0:
+        return _BACKEND_ONLINE
+    try:
+        import requests
+        r = requests.get(api_url, timeout=0.04)
+        _BACKEND_ONLINE = (r.status_code == 200)
+    except Exception:
+        _BACKEND_ONLINE = False
+    _LAST_BACKEND_CHECK = now
+    return _BACKEND_ONLINE
+
 
 def send_alert_to_api(
     payload: dict,
     snapshot_crop: np.ndarray | None = None,
     api_url: str = "http://localhost:8000/api/alerts",
+    enable_api: bool = True,
 ) -> None:
     """Non-blocking alert forwarding to FastAPI backend & React C2 Dashboard."""
+    if not enable_api or not is_backend_online():
+        return
     try:
         import requests
         if snapshot_crop is not None:
             ret, buf = cv2.imencode(".jpg", snapshot_crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if ret:
                 payload["snapshot_base64"] = base64.b64encode(buf.tobytes()).decode("utf-8")
-        requests.post(api_url, json=payload, timeout=0.25)
+        requests.post(api_url, json=payload, timeout=0.2)
     except Exception:
         pass
 
@@ -59,8 +82,11 @@ def send_alert_to_api(
 def send_frame_to_stream(
     frame: np.ndarray,
     stream_url: str = "http://localhost:8000/api/stream/frame",
+    enable_api: bool = True,
 ) -> None:
     """Non-blocking live frame forwarding to FastAPI live stream."""
+    if not enable_api or not is_backend_online():
+        return
     try:
         import requests
         h, w = frame.shape[:2]
@@ -69,7 +95,7 @@ def send_frame_to_stream(
             frame = cv2.resize(frame, (960, int(h * scale)), interpolation=cv2.INTER_AREA)
         ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
         if ret:
-            requests.post(stream_url, data=buf.tobytes(), timeout=0.08)
+            requests.post(stream_url, data=buf.tobytes(), timeout=0.05)
     except Exception:
         pass
 
@@ -310,6 +336,7 @@ def main(
     sample_fps: float,
     yolo_confidence: float,
     overlap_threshold: float,
+    enable_api: bool = True,
 ) -> None:
     reset_alignment_state()
     before_cap = cv2.VideoCapture(before_path)
@@ -345,6 +372,16 @@ def main(
     print(f"Sampling at {output_fps:.1f} FPS | Diff Threshold: {threshold} | Min Area: {min_area} px")
     print(f"YOLO Confidence: {yolo_confidence} | Overlap Threshold: {overlap_threshold:.0%}")
     print(f"Recording output to: {output}")
+
+    # Check if full-stack dashboard is active
+    if enable_api and is_backend_online():
+        print("Backend Status: ONLINE -> Streaming live alerts & video to http://localhost:8000")
+    else:
+        enable_api = False
+        print("Backend Status: STANDALONE MODE (FastAPI not running)")
+        print(" -> All intrusion snapshots saved to outputs/alerts/")
+        print(" -> Full audit log saved to outputs/alerts.json")
+        print(" -> Live popup display window active (zero lag)")
     print("=" * 75)
 
     print("Loading YOLOv8n detector...")
@@ -460,7 +497,7 @@ def main(
                     },
                     "environmental_noise_filtered": False,
                 }
-                send_alert_to_api(api_payload, snapshot_crop=combined_crop)
+                send_alert_to_api(api_payload, snapshot_crop=combined_crop, enable_api=enable_api)
             elif category == "TREES":
                 color = COLOR_NATURAL_TREES
                 thickness = 1
@@ -490,7 +527,7 @@ def main(
                         "environmental_verdict": "FALSE ALARM SUPPRESSED (Natural motion filtered)"
                     },
                     "environmental_noise_filtered": True,
-                })
+                }, enable_api=enable_api)
             else:
                 color = COLOR_STATIC
                 thickness = 1
@@ -539,7 +576,7 @@ def main(
         draw_hud_header(combined, source_frame_index, time_sec, len(current_frame_alerts), matches, inliers)
 
         writer.write(combined)
-        send_frame_to_stream(annotated_after)
+        send_frame_to_stream(annotated_after, enable_api=enable_api)
 
         if preview:
             try:
@@ -619,6 +656,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--overlap-threshold", type=float, default=0.15, help="Minimum region coverage by YOLO box (default: 0.15)"
     )
+    parser.add_argument(
+        "--no-api", action="store_false", dest="enable_api", default=True, help="Run in offline standalone mode without API streaming"
+    )
     args = parser.parse_args()
     main(
         args.before_video,
@@ -632,4 +672,5 @@ if __name__ == "__main__":
         args.sample_fps,
         args.yolo_confidence,
         args.overlap_threshold,
+        args.enable_api,
     )

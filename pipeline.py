@@ -27,8 +27,31 @@ BF_MATCHER = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 CLAHE = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
 
 
+import time
+
+_BACKEND_ONLINE = None
+_LAST_BACKEND_CHECK = 0.0
+
+
+def is_backend_online(api_url="http://localhost:8000/api/health"):
+    global _BACKEND_ONLINE, _LAST_BACKEND_CHECK
+    now = time.time()
+    if _BACKEND_ONLINE is not None and (now - _LAST_BACKEND_CHECK) < 15.0:
+        return _BACKEND_ONLINE
+    try:
+        import requests
+        r = requests.get(api_url, timeout=0.04)
+        _BACKEND_ONLINE = (r.status_code == 200)
+    except Exception:
+        _BACKEND_ONLINE = False
+    _LAST_BACKEND_CHECK = now
+    return _BACKEND_ONLINE
+
+
 def send_alert_to_api(payload, api_url="http://localhost:8000/api/alerts"):
     """Non-blocking alert forwarding to Komal's FastAPI backend and React C2 Dashboard."""
+    if not is_backend_online():
+        return
     try:
         import requests
         requests.post(api_url, json=payload, timeout=0.2)
@@ -38,6 +61,8 @@ def send_alert_to_api(payload, api_url="http://localhost:8000/api/alerts"):
 
 def send_frame_to_stream(frame, stream_url="http://localhost:8000/api/stream/frame"):
     """Non-blocking live frame forwarding to FastAPI live stream."""
+    if not is_backend_online():
+        return
     try:
         import requests
         h, w = frame.shape[:2]
@@ -46,7 +71,7 @@ def send_frame_to_stream(frame, stream_url="http://localhost:8000/api/stream/fra
             frame = cv2.resize(frame, (960, int(h * scale)), interpolation=cv2.INTER_AREA)
         ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
         if ret:
-            requests.post(stream_url, data=buf.tobytes(), timeout=0.08)
+            requests.post(stream_url, data=buf.tobytes(), timeout=0.05)
     except Exception:
         pass
 
