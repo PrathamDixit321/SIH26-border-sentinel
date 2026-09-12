@@ -37,7 +37,6 @@ outputs/*.png
 
 # Allow alerts.json to be tracked
 !outputs/alerts.json
-!alerts/alerts.json
 
 # ==========================================
 # Model weights & training runs
@@ -71,3 +70,13 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Frontend build and dependencies
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
+dist/
+
+# Local database runtime
+backend/sample_data/alerts_db.json
+

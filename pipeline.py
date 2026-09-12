@@ -27,6 +27,15 @@ BF_MATCHER = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 CLAHE = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
 
 
+def send_alert_to_api(payload, api_url="http://localhost:8000/api/alerts"):
+    """Non-blocking alert forwarding to Komal's FastAPI backend and React C2 Dashboard."""
+    try:
+        import requests
+        requests.post(api_url, json=payload, timeout=0.2)
+    except Exception:
+        pass
+
+
 def align_frames(prev_gray, curr_gray):
     """Align curr to prev using Partial Affine (rotation + translation)
     to handle camera jitter without projective shear distortion."""
@@ -389,6 +398,33 @@ def process_video(path, show_live=True):
                     "metrics": metrics
                 }
                 alerts.append(alert)
+                send_alert_to_api({
+                    "alert_id": f"ALT-LIVE-{frame_idx:05d}",
+                    "camera_id": "CAM-01",
+                    "sector": "Sector 4 (North Ridge)",
+                    "threat_level": "CRITICAL" if category == "PEDESTRIAN" else "HIGH",
+                    "label": label,
+                    "category": category,
+                    "confidence": float(conf),
+                    "bbox": [int(x), int(y), int(w), int(h)],
+                    "reason": reason,
+                    "metrics": metrics,
+                    "environmental_noise_filtered": False
+                })
+            elif label == "NATURAL":
+                send_alert_to_api({
+                    "alert_id": f"NOISE-LIVE-{frame_idx:05d}",
+                    "camera_id": "CAM-02",
+                    "sector": "Sector 2 (Foliage Valley)",
+                    "threat_level": "LOW",
+                    "label": label,
+                    "category": category,
+                    "confidence": float(conf),
+                    "bbox": [int(x), int(y), int(w), int(h)],
+                    "reason": reason,
+                    "metrics": metrics,
+                    "environmental_noise_filtered": True
+                })
 
             # Visual overlay by category
             if show_live:
@@ -468,6 +504,19 @@ def run_synthetic_smoke_test():
         print(f"  -> Classified as {label} [{cat}] (confidence {conf:.2f})")
         print(f"     Reason:  {reason}")
         print(f"     Metrics: {metrics}\n")
+        send_alert_to_api({
+            "alert_id": f"SMOKE-TEST-{cat}",
+            "camera_id": "CAM-01",
+            "sector": "Sector 4 (Synthetic Smoke Test)",
+            "threat_level": "CRITICAL" if label == "HUMAN" else "LOW",
+            "label": label,
+            "category": cat,
+            "confidence": float(conf),
+            "bbox": [150, 120, 40, 100],
+            "reason": reason,
+            "metrics": metrics,
+            "environmental_noise_filtered": (label != "HUMAN")
+        })
 
 
 if __name__ == "__main__":
