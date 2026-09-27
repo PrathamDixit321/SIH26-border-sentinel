@@ -76,6 +76,62 @@ def send_frame_to_stream(frame, stream_url="http://localhost:8000/api/stream/fra
         pass
 
 
+class LowLightEnhancer:
+    """
+    Conditionally enhances visibility in dark surveillance frames using
+    adaptive gamma correction and CLAHE in LAB space.
+    Employs Schmitt-trigger hysteresis to eliminate on/off flickering in transition zones.
+    """
+    def __init__(self, low_thresh: float = 50.0, high_thresh: float = 65.0, clip_limit: float = 2.2, gamma: float = 1.35):
+        self.low_thresh = low_thresh
+        self.high_thresh = high_thresh
+        self.clip_limit = clip_limit
+        self.gamma = gamma
+        self.is_active = False
+        self.clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+        
+        # Precompute gamma lookup table for zero-overhead performance
+        inv_gamma = 1.0 / gamma
+        self.gamma_lut = np.array([((i / 255.0) ** inv_gamma) * 255 for i in range(256)]).astype(np.uint8)
+
+    def process(self, frame_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray, bool, float]:
+        """
+        Returns:
+            enhanced_bgr: Enhanced BGR frame (or original if daylight)
+            enhanced_gray: Enhanced grayscale frame for alignment/change detection
+            is_active: Boolean indicating whether low-light mode is active
+            mean_lum: Raw measured mean luminance of incoming frame (0-255)
+        """
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        mean_lum = float(np.mean(gray))
+
+        # Hysteresis state machine (Schmitt trigger)
+        if self.is_active:
+            # Active state: only disengage if scene brightness rises firmly above high_thresh
+            if mean_lum > self.high_thresh:
+                self.is_active = False
+        else:
+            # Inactive state: only engage if scene brightness drops firmly below low_thresh
+            if mean_lum < self.low_thresh:
+                self.is_active = True
+
+        if not self.is_active:
+            return frame_bgr, gray, False, mean_lum
+
+        # Step 1: Gamma expansion to lift deep shadows without blowing highlights
+        gamma_bgr = cv2.LUT(frame_bgr, self.gamma_lut)
+
+        # Step 2: CLAHE on L-channel in CIELAB color space (preserves chromatic balance)
+        lab = cv2.cvtColor(gamma_bgr, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        enhanced_l = self.clahe.apply(l_channel)
+        enhanced_lab = cv2.merge((enhanced_l, a_channel, b_channel))
+        enhanced_bgr = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+        enhanced_gray = cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2GRAY)
+
+        return enhanced_bgr, enhanced_gray, True, mean_lum
+
+
 def align_frames(prev_gray, curr_gray):
     """Align curr to prev using Partial Affine (rotation + translation)
     to handle camera jitter without projective shear distortion."""
@@ -330,10 +386,9 @@ def process_video(path, show_live=True):
     # Normalize temporal stride across camera frame rates (~80-100ms window)
     stride = max(1, round(fps / 12.0))
 
-    # Sample initial lighting level to detect darkness/night conditions
-    init_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-    mean_lum = float(np.mean(init_gray))
-    is_low_light = mean_lum < 55.0
+    # Sample initial lighting level and initialize LowLightEnhancer with hysteresis
+    enhancer = LowLightEnhancer(low_thresh=50.0, high_thresh=65.0, clip_limit=2.2, gamma=1.35)
+    init_bgr, init_gray, is_low_light, mean_lum = enhancer.process(prev_frame)
     is_high_altitude = is_low_light or (fps > 45.0)
 
     # Adaptive CV parameters
@@ -344,7 +399,7 @@ def process_video(path, show_live=True):
     print(f"Processing video: {path}")
     print(f"FPS: {fps:.1f} | Dynamic Stride: {stride} frames (~{stride/fps*1000:.1f}ms window)")
     if is_low_light:
-        print(f"[NIGHT VISION ENGAGED] Low-light scene detected (Mean Lum: {mean_lum:.1f}/255). CLAHE contrast boost enabled.")
+        print(f"[NIGHT VISION ENGAGED] Low-light scene detected (Mean Lum: {mean_lum:.1f}/255). Hysteresis + CLAHE active.")
     if is_high_altitude:
         print(f"[HIGH-ALTITUDE PERSPECTIVE MODE] Scaled for distant targets & high elevations (e.g. 12th floor).")
     print("Controls: Press [SPACE] to pause/resume, [Q] to exit live view.")
@@ -360,13 +415,13 @@ def process_video(path, show_live=True):
         if not ret:
             break
         frame_idx += 1
-        curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
 
-        # Apply CLAHE contrast boost in darkness
-        if is_low_light:
-            processed_gray = CLAHE.apply(curr_gray)
-        else:
-            processed_gray = curr_gray
+        # Conditionally enhance low-light with Schmitt-trigger hysteresis
+        enhanced_bgr, processed_gray, is_low_light, mean_lum = enhancer.process(curr_frame)
+        is_high_altitude = is_low_light or (fps > 45.0)
+        thresh = 18 if is_low_light else 28
+        min_area = 220 if is_high_altitude else 600
+        min_dim = 16 if is_high_altitude else 30
 
         frame_buffer.append(processed_gray)
         if len(frame_buffer) <= stride:
@@ -382,10 +437,11 @@ def process_video(path, show_live=True):
             ref_gray, aligned, thresh=thresh, min_area=min_area, min_dim=min_dim
         )
 
-        # 3. Object detection on the current frame
+        # 3. Object detection on the current frame (enhanced in dark scenes)
         yolo_detections = []
         if MODEL is not None:
-            results = MODEL.predict(curr_frame, verbose=False)[0]
+            detection_input = enhanced_bgr if is_low_light else curr_frame
+            results = MODEL.predict(detection_input, verbose=False)[0]
             if results.boxes is not None:
                 for box in results.boxes:
                     cls_id = int(box.cls[0])
@@ -398,8 +454,8 @@ def process_video(path, show_live=True):
                             "bbox": [x1, y1, x2, y2]
                         })
 
-        # Visualization frame
-        display_frame = curr_frame.copy() if show_live else None
+        # Visualization frame: display enhanced view in night mode so operator sees into shadows
+        display_frame = enhanced_bgr.copy() if (show_live and is_low_light) else (curr_frame.copy() if show_live else None)
 
         # Build raw detection tuples for tracking
         raw_dets = []
