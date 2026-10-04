@@ -107,6 +107,76 @@ export default function VideoFeed({ selectedCam, setSelectedCam, latestAlert, on
             </div>
           )}
 
+          {/* Virtual Tripwire Geofence Overlay */}
+          {showTripwire && (
+            <svg
+              className="absolute inset-0 w-full h-full pointer-events-none z-10"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+            >
+              <defs>
+                <linearGradient id="twGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop
+                    offset="0%"
+                    stopColor={latestAlert?.threat_level === "CRITICAL" ? "#ef4444" : "#06b6d4"}
+                    stopOpacity="0.8"
+                  />
+                  <stop
+                    offset="50%"
+                    stopColor={latestAlert?.threat_level === "CRITICAL" ? "#ff0044" : "#38bdf8"}
+                    stopOpacity="1"
+                  />
+                  <stop
+                    offset="100%"
+                    stopColor={latestAlert?.threat_level === "CRITICAL" ? "#ef4444" : "#06b6d4"}
+                    stopOpacity="0.8"
+                  />
+                </linearGradient>
+              </defs>
+              <line
+                x1="5"
+                y1="62"
+                x2="95"
+                y2="54"
+                stroke="url(#twGradient)"
+                strokeWidth="0.8"
+                strokeDasharray="2, 1"
+                className={latestAlert?.threat_level === "CRITICAL" ? "animate-pulse" : ""}
+              />
+              <circle cx="5" cy="62" r="1.2" fill="#ef4444" />
+              <circle cx="95" cy="54" r="1.2" fill="#ef4444" />
+              <text
+                x="35"
+                y="57"
+                fill={latestAlert?.threat_level === "CRITICAL" ? "#f87171" : "#38bdf8"}
+                fontSize="2.4"
+                fontFamily="monospace"
+                fontWeight="bold"
+              >
+                [VIRTUAL TRIPWIRE TW-01: RED ZONE ALPHA]
+              </text>
+            </svg>
+          )}
+
+          {/* Dynamic Target Bounding Box Overlay */}
+          {showBBoxes && latestAlert?.bbox && (
+            <div
+              className="absolute pointer-events-none border-2 border-red-500 bg-red-500/10 z-10 transition-all duration-300"
+              style={{
+                left: `${Math.max(2, Math.min(90, (latestAlert.bbox[0] / 640) * 100))}%`,
+                top: `${Math.max(2, Math.min(85, (latestAlert.bbox[1] / 360) * 100))}%`,
+                width: `${Math.max(5, Math.min(50, (latestAlert.bbox[2] / 640) * 100))}%`,
+                height: `${Math.max(5, Math.min(60, (latestAlert.bbox[3] / 360) * 100))}%`,
+              }}
+            >
+              <div className="absolute -top-5 left-0 bg-red-600 text-white font-mono text-[9px] px-1 py-0.5 rounded flex items-center gap-1 shadow">
+                <span>{latestAlert.category || "INTRUDER"}</span>
+                <span>{(latestAlert.confidence * 100).toFixed(0)}%</span>
+              </div>
+            </div>
+          )}
+
+
           {/* Bottom active threat ticker if a critical intrusion is current */}
           {latestAlert && latestAlert.threat_level === "CRITICAL" && (
             <div className="pointer-events-auto bg-red-950/80 backdrop-blur border border-red-500/60 p-2.5 rounded-lg flex items-center justify-between gap-3 shadow-[0_0_20px_rgba(255,51,75,0.3)] animate-pulse-slow">

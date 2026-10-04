@@ -12,6 +12,9 @@ import sys
 from collections import deque
 import cv2
 import numpy as np
+
+from tripwire_engine import VirtualTripwire
+
 try:
     from ultralytics import YOLO
     MODEL = YOLO("yolov8n.pt")
@@ -388,6 +391,7 @@ def process_video(path, show_live=True):
 
     # Sample initial lighting level and initialize LowLightEnhancer with hysteresis
     enhancer = LowLightEnhancer(low_thresh=50.0, high_thresh=65.0, clip_limit=2.2, gamma=1.35)
+    tripwire = VirtualTripwire(name="TW-01", p1_norm=(0.05, 0.62), p2_norm=(0.95, 0.54))
     init_bgr, init_gray, is_low_light, mean_lum = enhancer.process(prev_frame)
     is_high_altitude = is_low_light or (fps > 45.0)
 
@@ -484,6 +488,7 @@ def process_video(path, show_live=True):
             print(f"    Metrics: area={metrics['area']}, sol={metrics['solidity']}, disp={metrics['displacement']}px, frames={metrics['frames_tracked']}, frags={metrics['fragments']}")
 
             if label == "HUMAN":
+                zone_verdict = tripwire.evaluate_target([int(x), int(y), int(w), int(h)], curr_frame.shape)
                 alert = {
                     "frame": frame_idx,
                     "bbox": [int(x), int(y), int(w), int(h)],
@@ -491,6 +496,8 @@ def process_video(path, show_live=True):
                     "category": category,
                     "confidence": conf,
                     "reason": reason,
+                    "zone": zone_verdict.zone_name,
+                    "is_breach": zone_verdict.is_breach,
                     "metrics": metrics
                 }
                 alerts.append(alert)
@@ -498,13 +505,26 @@ def process_video(path, show_live=True):
                     "alert_id": f"ALT-LIVE-{frame_idx:05d}",
                     "camera_id": "CAM-01",
                     "sector": "Sector 4 (North Ridge)",
-                    "threat_level": "CRITICAL" if category == "PEDESTRIAN" else "HIGH",
+                    "threat_level": zone_verdict.threat_level if category == "PEDESTRIAN" else ("HIGH" if zone_verdict.is_breach else "MEDIUM"),
                     "label": label,
                     "category": category,
                     "confidence": float(conf),
                     "bbox": [int(x), int(y), int(w), int(h)],
+                    "zone": zone_verdict.zone_name,
                     "reason": reason,
-                    "metrics": metrics,
+                    "metrics": {
+                        **metrics,
+                        "penetration_depth_m": zone_verdict.penetration_depth_m,
+                        "low_light_active": is_low_light,
+                        "mean_luminance": round(mean_lum, 1),
+                    },
+                    "xai_breakdown": {
+                        "shape_analysis": f"Heuristic morphology match: {category} (solidity {metrics.get('solidity', 0):.2f})",
+                        "motion_profile": "Sustained directional motion across temporal stride",
+                        "frame_alignment": "Partial affine jitter stabilization active",
+                        "zone_intrusion": zone_verdict.xai_explanation,
+                        "environmental_verdict": f"CONFIRMED INTRUSION ({zone_verdict.threat_level})"
+                    },
                     "environmental_noise_filtered": False
                 })
             elif label == "NATURAL":
@@ -517,17 +537,18 @@ def process_video(path, show_live=True):
                     "category": category,
                     "confidence": float(conf),
                     "bbox": [int(x), int(y), int(w), int(h)],
+                    "zone": "Green Buffer Zone",
                     "reason": reason,
                     "metrics": metrics,
                     "environmental_noise_filtered": True
                 })
 
             # Visual overlay by category
-            if show_live:
+            if show_live and display_frame is not None:
                 if category == "PEDESTRIAN":
                     # RED for Walking Pedestrian
                     cv2.rectangle(display_frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                    cv2.putText(display_frame, f"HUMAN: Pedestrian ({conf:.2f})", (x, max(18, y - 6)),
+                    cv2.putText(display_frame, f"HUMAN: Pedestrian ({conf:.2f}) [{alert['zone'].split()[0]}]", (x, max(18, y - 6)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 2)
                 elif category == "VEHICLE":
                     # AMBER/GOLD for Moving Vehicle or Headlight
@@ -546,6 +567,10 @@ def process_video(path, show_live=True):
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
 
         # 5. Live HUD and interactive window
+        if display_frame is not None:
+            has_breach = any(a.get("is_breach", False) for a in alerts)
+            tripwire.draw_hud_tripwire(display_frame, is_breached=has_breach)
+
         send_frame_to_stream(display_frame)
         if show_live:
             # Top HUD bar

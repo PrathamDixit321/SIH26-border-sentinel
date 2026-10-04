@@ -65,15 +65,19 @@ SIH26-border-sentinel/
 │   ├── sample_alerts.json     # Golden Day-1 sample JSON contract
 │   ├── ALERT_SCHEMA.md        # Partner API documentation & copy-paste snippets
 │   └── mock_pipeline_feed.py  # Mock pipeline alert generator
+├── tripwire_engine.py         # Feature 2: Virtual Tripwire & Geofenced Security Zone Engine
 ├── step1_two_video_alignment.py # Stage 1: Robust homography & partial affine alignment (anti-blur/anti-zoom)
 ├── step2_change_detection.py    # Stage 2: Mutual field of view difference detection & live preview
 ├── step3_yolo_overlap.py        # Stage 3: YOLOv8 target detection + changed region overlap
 ├── step4_classifier_alerts.py   # Stage 4: Explainable Human vs Natural Classifier & Live C2 Alert Engine
-├── pipeline.py                # Core consecutive-frame CV pipeline with auto-API dispatch
-├── step1_yolo_test.py         # YOLOv8 test script
+├── pipeline.py                # Core consecutive-frame CV pipeline with auto-API dispatch & low-light hysteresis
+├── test_feature1_lowlight.py  # Feature 1 test suite: Schmitt trigger hysteresis validation
+├── test_feature2_tripwire.py  # Feature 2 test suite: Spatial breach & perimeter buffer tests
+├── run.bat                    # One-click Windows interactive launcher (all / web / cv / tests)
 ├── run_demo.ps1               # One-click unified full-stack launcher (Backend + Dashboard + CV Pipeline)
 ├── requirements.txt           # CV pipeline dependencies
 └── README.md
+
 ```
 
 ## 🚀 Quickstart & One-Click Launch
