@@ -23,6 +23,10 @@ Border Sentinel AI continuously compares each new video frame against the most r
 5. **Adaptive Chaining** — each frame is compared against the *most recent* frame, not a fixed baseline, so gradual natural scene changes don't keep re-triggering alerts.
 6. **Dashboard** — live feed, alert history, snapshot, and a plain-language reason for every alert.
 
+### Thermal Input
+
+Run the same pipeline with `python pipeline.py <video> --input-mode THERMAL`. The input layer normalizes single-channel thermal-style frames to grayscale for the existing alignment and change-detection stages and creates a pseudo-color view for display. RGB remains the default. This is architecture-level thermal-input support demonstrated using sample thermal imagery, not validation on live thermal-camera hardware. The local QA sample source is [UBCSailbot's FLIR Lepton 16-bit image](https://github.com/UBCSailbot/obstacle-detection/blob/dev/resources/img/16bit/fishingBoat01.png); it is not bundled with this repository.
+
 ## 🌟 What Makes This Different
 
 Most existing CCTV-AI systems detect *that* something/someone is in frame. Border Sentinel AI reasons about *what changed since last time* and explicitly separates human-caused change from natural environmental change — reducing false alarms from wind/animals while catching genuine intrusions, using infrastructure that's already deployed.

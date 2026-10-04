@@ -5,9 +5,11 @@ import VideoFeed from "./components/VideoFeed";
 import AlertFeed from "./components/AlertFeed";
 import ExplainabilityModal from "./components/ExplainabilityModal";
 import { playAlertSound } from "./utils/sound";
+import { getWeaponAlertFromEvent } from "./utils/weaponAlerts";
 
 export default function App() {
   const [alerts, setAlerts] = useState([]);
+  const [weaponAlert, setWeaponAlert] = useState(null);
   const [stats, setStats] = useState(null);
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [selectedCam, setSelectedCam] = useState("CAM-01");
@@ -74,6 +76,13 @@ export default function App() {
                 .then((r) => r.json())
                 .then((s) => setStats(s))
                 .catch(() => {});
+            } else if (msg.type === "WEAPON_ALERT") {
+              const eventData = getWeaponAlertFromEvent(msg);
+              if (!eventData) return;
+              setWeaponAlert(eventData);
+              if (eventData.weapon_detected && soundEnabled) {
+                playAlertSound("CRITICAL");
+              }
             } else if (msg.type === "ALERT_ACKNOWLEDGED" && msg.data) {
               setAlerts((prev) =>
                 prev.map((a) => (a.alert_id === msg.data.alert_id ? msg.data : a))
@@ -176,6 +185,25 @@ export default function App() {
     }
   };
 
+  const handleSimulateWeapon = async () => {
+    try {
+      await fetch("/api/weapon-alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          weapon_detected: true,
+          weapon_type: "rifle",
+          weapon_confidence: 0.94,
+          timestamp: new Date().toISOString(),
+          sector: "Sector 7 (Riverine Outpost)",
+          camera_id: "CAM-03",
+        }),
+      });
+    } catch (err) {
+      console.error("Weapon alert simulation error:", err);
+    }
+  };
+
   const latestAlert = alerts.find((a) => a.threat_level === "CRITICAL" && a.status === "UNACKNOWLEDGED") || alerts[0];
 
   return (
@@ -188,6 +216,7 @@ export default function App() {
         setSoundEnabled={setSoundEnabled}
         onSimulateThreat={handleSimulateThreat}
         onSimulateEnvironmental={handleSimulateEnvironmental}
+        onSimulateWeapon={handleSimulateWeapon}
         isSimulating={isSimulating}
       />
 
@@ -240,6 +269,7 @@ export default function App() {
           <div className="lg:col-span-5 flex flex-col">
             <AlertFeed
               alerts={alerts}
+              weaponAlert={weaponAlert}
               selectedAlert={selectedAlert}
               onSelectAlert={(alert) => setSelectedAlert(alert)}
               onAcknowledge={handleAcknowledge}

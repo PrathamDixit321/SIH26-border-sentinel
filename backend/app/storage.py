@@ -24,6 +24,7 @@ class AlertStore:
             "timestamp": a.get("timestamp") or datetime.now().isoformat(),
             "camera_id": a.get("camera_id") or "CAM-01",
             "sector": a.get("sector") or "Sector 4 (North Ridge Fence)",
+            "input_mode": a.get("input_mode") if a.get("input_mode") in ("RGB", "THERMAL") else "RGB",
             "threat_level": a.get("threat_level") or ("CRITICAL" if category == "PEDESTRIAN" else "HIGH"),
             "label": label,
             "category": category,

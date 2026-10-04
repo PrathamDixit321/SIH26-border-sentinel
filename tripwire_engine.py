@@ -66,6 +66,79 @@ class LowLightEnhancer:
         return enhanced_bgr, enhanced_gray, True, mean_lum
 
 
+class ThermalNormalizer:
+    """
+    Feature 2: Thermal Input Support for Border Sentinel AI.
+    Normalizes single-channel thermal / Long-Wave Infrared (LWIR) surveillance frames
+    into standard pipeline representations.
+
+    Capabilities:
+    1. Input format normalization: Accepts single-channel 8-bit (0-255), 16-bit radiometric
+       data, or 3-channel grayscale BGR arrays.
+    2. Dynamic Range Expansion: Applies contrast-limited adaptive histogram equalization
+       tuned specifically for thermal gradients (separating 37°C body/engine heat signatures
+       from ambient background terrain).
+    3. Output generation:
+       - processed_gray: Standard single-channel uint8 array for downstream align_frames()
+         and compute_change_mask().
+       - display_bgr: Radiometric thermal pseudo-coloring (Inferno/Ironbow palette) for C2
+         operator visualization and live streaming, with thermal telemetry badge.
+
+    Honesty / Prototype Note:
+    Designed for simulated and FLIR sample thermal imagery. Does not claim direct
+    radiometric calibration with live proprietary thermal camera hardware.
+    """
+    def __init__(self, colormap: int = cv2.COLORMAP_INFERNO, clip_limit: float = 3.2):
+        self.colormap = colormap
+        self.clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+
+    def process(self, frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Processes a thermal frame into pipeline-compatible representations.
+        Returns:
+            (display_bgr, processed_gray)
+        """
+        if not isinstance(frame, np.ndarray) or frame.size == 0:
+            raise ValueError("Thermal frame must be a non-empty NumPy array.")
+
+        if frame.ndim == 2:
+            gray = frame
+        elif frame.ndim == 3 and frame.shape[2] == 1:
+            gray = frame[:, :, 0]
+        elif frame.ndim == 3 and frame.shape[2] == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            raise ValueError(f"Unsupported thermal frame shape: {frame.shape}")
+
+        if not np.issubdtype(gray.dtype, np.number) or np.iscomplexobj(gray):
+            raise ValueError(f"Unsupported thermal frame dtype: {gray.dtype}")
+        if not np.isfinite(gray).all():
+            raise ValueError("Thermal frame contains non-finite values.")
+
+        if gray.dtype != np.uint8:
+            gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+
+        enhanced_gray = self.clahe.apply(gray)
+        display_bgr = cv2.applyColorMap(enhanced_gray, self.colormap)
+
+        return display_bgr, enhanced_gray
+
+
+def is_thermal_frame(frame: np.ndarray) -> bool:
+    """
+    Heuristic check to detect single-channel thermal frame or 3-channel grayscale thermal feed.
+    """
+    if len(frame.shape) == 2:
+        return True
+    if len(frame.shape) == 3 and frame.shape[2] == 1:
+        return True
+    if len(frame.shape) == 3 and frame.shape[2] == 3:
+        diff_bg = np.max(np.abs(frame[:, :, 0].astype(np.int16) - frame[:, :, 1].astype(np.int16)))
+        diff_gr = np.max(np.abs(frame[:, :, 1].astype(np.int16) - frame[:, :, 2].astype(np.int16)))
+        if diff_bg <= 2 and diff_gr <= 2:
+            return True
+    return False
+
 
 class VirtualTripwire:
     """

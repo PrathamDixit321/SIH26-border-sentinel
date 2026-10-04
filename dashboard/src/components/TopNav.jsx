@@ -8,6 +8,7 @@ export default function TopNav({
   setSoundEnabled,
   onSimulateThreat,
   onSimulateEnvironmental,
+  onSimulateWeapon,
   isSimulating
 }) {
   const [timeStr, setTimeStr] = useState("");
@@ -118,6 +119,15 @@ export default function TopNav({
           >
             <Wind className="w-3.5 h-3.5 text-emerald-400" />
             <span>WIND/NOISE (USP)</span>
+          </button>
+
+          <button
+            onClick={onSimulateWeapon}
+            className="px-2.5 py-1.5 rounded bg-red-950 border border-red-400/70 hover:bg-red-900 text-red-100 font-mono text-xs flex items-center gap-1.5 transition"
+            title="Send a mock rifle detection through the immediate priority alert channel"
+          >
+            <ShieldAlert className="w-3.5 h-3.5 text-red-300" />
+            <span>SIM WEAPON ALERT</span>
           </button>
         </div>
 

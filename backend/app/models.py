@@ -1,4 +1,4 @@
-﻿from typing import List, Optional, Dict, Any, Union
+﻿from typing import List, Literal, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -10,6 +10,7 @@ class AlertMetrics(BaseModel):
     displacement: Optional[float] = 0.0
     frames_tracked: Optional[int] = 0
     yolo_match: Optional[str] = None
+    low_light_active: Optional[bool] = None
 
 class XAIBreakdown(BaseModel):
     shape_analysis: Optional[str] = "Shape analyzed"
@@ -21,6 +22,7 @@ class XAIBreakdown(BaseModel):
 class AlertBase(BaseModel):
     camera_id: str = "CAM-01"
     sector: str = "Sector 4 (North Ridge Fence)"
+    input_mode: Literal["RGB", "THERMAL"] = "RGB"
     threat_level: str = "CRITICAL"  # CRITICAL, HIGH, MEDIUM, LOW
     label: str = "HUMAN"           # HUMAN, NATURAL, STATIC
     category: str = "PEDESTRIAN"    # PEDESTRIAN, VEHICLE, TREES, PARKED_CAR
@@ -49,6 +51,15 @@ class Alert(AlertBase):
 class AlertAcknowledge(BaseModel):
     operator_notes: Optional[str] = "Reviewed by operator"
     dispatched_unit: Optional[str] = None
+
+class WeaponDetectionInput(BaseModel):
+    weapon_detected: bool
+    weapon_type: Optional[str] = None
+    weapon_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    timestamp: Optional[str] = None
+    location: Optional[str] = None
+    sector: Optional[str] = None
+    camera_id: Optional[str] = None
 
 class SystemStats(BaseModel):
     total_alerts: int

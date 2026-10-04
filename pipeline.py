@@ -8,12 +8,12 @@ Enhanced Border Sentinel CV Pipeline:
   5. Detailed metric telemetry per region to enable real-data threshold tuning.
 """
 
-import sys
+import argparse
 from collections import deque
 import cv2
 import numpy as np
 
-from tripwire_engine import VirtualTripwire
+from tripwire_engine import ThermalNormalizer, VirtualTripwire
 
 try:
     from ultralytics import YOLO
@@ -161,6 +161,23 @@ def align_frames(prev_gray, curr_gray):
     h, w = prev_gray.shape
     aligned = cv2.warpAffine(curr_gray, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
     return aligned
+
+
+def _preprocess_input_frame(frame, input_mode, enhancer, thermal_normalizer):
+    """Return display BGR, processing grayscale, low-light state, and luminance."""
+    if not isinstance(frame, np.ndarray) or frame.size == 0:
+        raise ValueError("Input frame must be a non-empty NumPy array.")
+
+    if input_mode == "THERMAL":
+        display_bgr, processed_gray = thermal_normalizer.process(frame)
+        return display_bgr, processed_gray, False, float(np.mean(processed_gray))
+
+    if input_mode != "RGB":
+        raise ValueError("input_mode must be 'RGB' or 'THERMAL'.")
+    if frame.ndim != 3 or frame.shape[2] != 3 or frame.dtype != np.uint8:
+        raise ValueError("RGB input must be an 8-bit, three-channel BGR frame.")
+
+    return enhancer.process(frame)
 
 
 def compute_change_mask(prev_gray, aligned_curr_gray, thresh=28, blur_ksize=5, border_margin=18, min_area=600, min_dim=30):
@@ -371,14 +388,24 @@ def classify_track(track, yolo_detections, is_high_altitude=False):
     return "NATURAL", 0.60, reason, metrics, "TREES"
 
 
-def process_video(path, show_live=True):
+def process_video(path, show_live=True, input_mode="RGB"):
     """
     Process video stream or file frame-by-frame with telemetry logging
     and real-time on-screen visual detection overlay.
     """
+    input_mode = input_mode.upper() if isinstance(input_mode, str) else input_mode
+    if input_mode not in ("RGB", "THERMAL"):
+        raise ValueError("input_mode must be 'RGB' or 'THERMAL'.")
+
     cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        cap.release()
+        print(f"Could not open or read video at '{path}'.")
+        return []
+
     ret, prev_frame = cap.read()
     if not ret:
+        cap.release()
         print(f"Could not open or read video at '{path}'.")
         return []
 
@@ -391,8 +418,11 @@ def process_video(path, show_live=True):
 
     # Sample initial lighting level and initialize LowLightEnhancer with hysteresis
     enhancer = LowLightEnhancer(low_thresh=50.0, high_thresh=65.0, clip_limit=2.2, gamma=1.35)
+    thermal_normalizer = ThermalNormalizer()
     tripwire = VirtualTripwire(name="TW-01", p1_norm=(0.05, 0.62), p2_norm=(0.95, 0.54))
-    init_bgr, init_gray, is_low_light, mean_lum = enhancer.process(prev_frame)
+    init_bgr, init_gray, is_low_light, mean_lum = _preprocess_input_frame(
+        prev_frame, input_mode, enhancer, thermal_normalizer
+    )
     is_high_altitude = is_low_light or (fps > 45.0)
 
     # Adaptive CV parameters
@@ -401,7 +431,10 @@ def process_video(path, show_live=True):
     min_dim = 16 if is_high_altitude else 30
 
     print(f"Processing video: {path}")
+    print(f"Input mode: {input_mode}")
     print(f"FPS: {fps:.1f} | Dynamic Stride: {stride} frames (~{stride/fps*1000:.1f}ms window)")
+    if input_mode == "THERMAL":
+        print("Architecture-level thermal-input support; sample imagery only, not live-camera validation.")
     if is_low_light:
         print(f"[NIGHT VISION ENGAGED] Low-light scene detected (Mean Lum: {mean_lum:.1f}/255). Hysteresis + CLAHE active.")
     if is_high_altitude:
@@ -420,8 +453,10 @@ def process_video(path, show_live=True):
             break
         frame_idx += 1
 
-        # Conditionally enhance low-light with Schmitt-trigger hysteresis
-        enhanced_bgr, processed_gray, is_low_light, mean_lum = enhancer.process(curr_frame)
+        # Normalize at the input boundary; downstream algorithms remain shared.
+        enhanced_bgr, processed_gray, is_low_light, mean_lum = _preprocess_input_frame(
+            curr_frame, input_mode, enhancer, thermal_normalizer
+        )
         is_high_altitude = is_low_light or (fps > 45.0)
         thresh = 18 if is_low_light else 28
         min_area = 220 if is_high_altitude else 600
@@ -444,7 +479,7 @@ def process_video(path, show_live=True):
         # 3. Object detection on the current frame (enhanced in dark scenes)
         yolo_detections = []
         if MODEL is not None:
-            detection_input = enhanced_bgr if is_low_light else curr_frame
+            detection_input = enhanced_bgr if input_mode == "THERMAL" or is_low_light else curr_frame
             results = MODEL.predict(detection_input, verbose=False)[0]
             if results.boxes is not None:
                 for box in results.boxes:
@@ -459,7 +494,11 @@ def process_video(path, show_live=True):
                         })
 
         # Visualization frame: display enhanced view in night mode so operator sees into shadows
-        display_frame = enhanced_bgr.copy() if (show_live and is_low_light) else (curr_frame.copy() if show_live else None)
+        display_frame = (
+            enhanced_bgr.copy()
+            if show_live and (input_mode == "THERMAL" or is_low_light)
+            else (curr_frame.copy() if show_live else None)
+        )
 
         # Build raw detection tuples for tracking
         raw_dets = []
@@ -498,6 +537,7 @@ def process_video(path, show_live=True):
                     "reason": reason,
                     "zone": zone_verdict.zone_name,
                     "is_breach": zone_verdict.is_breach,
+                    "input_mode": input_mode,
                     "metrics": metrics
                 }
                 alerts.append(alert)
@@ -505,6 +545,7 @@ def process_video(path, show_live=True):
                     "alert_id": f"ALT-LIVE-{frame_idx:05d}",
                     "camera_id": "CAM-01",
                     "sector": "Sector 4 (North Ridge)",
+                    "input_mode": input_mode,
                     "threat_level": zone_verdict.threat_level if category == "PEDESTRIAN" else ("HIGH" if zone_verdict.is_breach else "MEDIUM"),
                     "label": label,
                     "category": category,
@@ -537,9 +578,10 @@ def process_video(path, show_live=True):
                     "category": category,
                     "confidence": float(conf),
                     "bbox": [int(x), int(y), int(w), int(h)],
+                    "input_mode": input_mode,
                     "zone": "Green Buffer Zone",
                     "reason": reason,
-                    "metrics": metrics,
+                    "metrics": {**metrics, "low_light_active": is_low_light},
                     "environmental_noise_filtered": True
                 })
 
@@ -575,7 +617,7 @@ def process_video(path, show_live=True):
         if show_live:
             # Top HUD bar
             cv2.rectangle(display_frame, (0, 0), (display_frame.shape[1], 34), (25, 25, 25), -1)
-            mode_badge = " [NIGHT VISION]" if is_low_light else ""
+            mode_badge = " [THERMAL]" if input_mode == "THERMAL" else (" [NIGHT VISION]" if is_low_light else "")
             hud_text = f"Border Sentinel AI{mode_badge} | Frame: {frame_idx} | Active Alerts: {len(alerts)}"
             cv2.putText(display_frame, hud_text, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1)
             cv2.putText(display_frame, "[SPACE] Pause  [Q] Quit", (display_frame.shape[1] - 180, 22),
@@ -642,8 +684,12 @@ def run_synthetic_smoke_test():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        process_video(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Border Sentinel RGB and thermal-input pipeline")
+    parser.add_argument("video", nargs="?", help="Video file or camera source")
+    parser.add_argument("--input-mode", choices=("RGB", "THERMAL"), default="RGB")
+    args = parser.parse_args()
+    if args.video:
+        process_video(args.video, input_mode=args.input_mode)
     else:
         run_synthetic_smoke_test()
 
