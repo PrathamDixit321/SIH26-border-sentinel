@@ -17,9 +17,11 @@ import json
 import math
 from pathlib import Path
 
-import cv2
-import numpy as np
-from ultralytics import YOLO
+try:
+    from ultralytics import YOLO
+except (ImportError, Exception):
+    YOLO = None
+
 
 from step1_two_video_alignment import (
     align_after_to_before_with_mask,
@@ -27,8 +29,11 @@ from step1_two_video_alignment import (
     reset_alignment_state,
 )
 
+from tripwire_engine import VirtualTripwire, LowLightEnhancer
+
 import time
 import base64
+
 
 # Target surveillance categories (COCO: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck)
 TARGET_CLASSES = {0: "person", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
@@ -171,8 +176,10 @@ def compute_clean_difference(
     return mask, regions, raw_contours
 
 
-def detect_yolo_targets(model: YOLO, aligned_frame: np.ndarray, confidence: float) -> list[dict]:
+def detect_yolo_targets(model, aligned_frame: np.ndarray, confidence: float) -> list[dict]:
     """Run YOLOv8 object detection restricted to person and vehicle classes."""
+    if model is None:
+        return []
     results = model.predict(
         source=aligned_frame,
         conf=confidence,
@@ -313,15 +320,23 @@ def save_alert_snapshot(
 
 
 def draw_hud_header(
-    panel: np.ndarray, frame_idx: int, time_sec: float, alert_count: int, matches: int, inliers: int
+    panel: np.ndarray,
+    frame_idx: int,
+    time_sec: float,
+    alert_count: int,
+    matches: int,
+    inliers: int,
+    is_low_light: bool = False,
 ) -> None:
     """Render a clean surveillance HUD header on top of the preview display."""
     cv2.rectangle(panel, (0, 0), (panel.shape[1], 34), (20, 20, 20), -1)
-    hud_left = f"Border Sentinel AI | Frame: {frame_idx:04d} ({time_sec:04.1f}s) | Active Human Alerts: {alert_count}"
+    nv_tag = " [NIGHT VISION]" if is_low_light else ""
+    hud_left = f"Border Sentinel AI | Frame: {frame_idx:04d} ({time_sec:04.1f}s){nv_tag} | Human Alerts: {alert_count}"
     cv2.putText(panel, hud_left, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1)
 
-    hud_right = f"ORB: {matches} matches, {inliers} inliers | [SPACE] Pause [Q] Quit"
-    cv2.putText(panel, hud_right, (panel.shape[1] - 440, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1)
+    hud_right = f"ORB: {matches} matches, {inliers} inliers | TW-01 ACTIVE | [SPACE] Pause [Q] Quit"
+    cv2.putText(panel, hud_right, (panel.shape[1] - 500, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1)
+
 
 
 def main(
@@ -384,8 +399,28 @@ def main(
         print(" -> Live popup display window active (zero lag)")
     print("=" * 75)
 
-    print("Loading YOLOv8n detector...")
-    model = YOLO("yolov8n.pt")
+    model = None
+    if YOLO is not None:
+        try:
+            print("Loading YOLOv8n detector...")
+            model = YOLO("yolov8n.pt")
+        except Exception as e:
+            print(f"[WARN] Failed to load YOLO detector: {e}. Running in heuristic-only mode.")
+    else:
+        print("[INFO] Running in heuristic-only mode (ultralytics package not installed)")
+
+
+    # Initialize Feature 1 (Low-Light Enhancer with Schmitt trigger hysteresis)
+    enhancer = LowLightEnhancer(low_thresh=50.0, high_thresh=65.0, clip_limit=2.2, gamma=1.35)
+
+    # Initialize Feature 2 (Virtual Tripwire TW-01 & Geofence Zone Engine)
+    tripwire = VirtualTripwire(
+        name="TW-01",
+        p1_norm=(0.05, 0.62),
+        p2_norm=(0.95, 0.54),
+        buffer_margin_px=45.0,
+        px_per_meter=22.0,
+    )
 
     window_name = "Border Sentinel AI - Stage 4 Intelligent Surveillance Monitor"
     if preview:
@@ -413,9 +448,13 @@ def main(
         before_frame = cv2.resize(before_frame, (width, height))
         after_frame = cv2.resize(after_frame, (width, height))
 
+        # Feature 1: Low-light enhancement with Schmitt trigger hysteresis
+        enhanced_after, after_gray, is_low_light, mean_lum = enhancer.process(after_frame)
+        processing_after = enhanced_after if is_low_light else after_frame
+
         # 1. Seamless robust alignment with valid overlap mask (no edge smears)
         aligned_after, matches, inliers, valid_mask = align_after_to_before_with_mask(
-            before_frame, after_frame
+            before_frame, processing_after
         )
 
         # 2. Extract clean difference mask within valid mutual overlap area
@@ -423,8 +462,9 @@ def main(
             before_frame, aligned_after, valid_mask, threshold=threshold, min_area=min_area, blur_size=5
         )
 
-        # 3. Detect YOLO targets in aligned after frame
-        yolo_targets = detect_yolo_targets(model, aligned_after, yolo_confidence)
+        # 3. Detect YOLO targets in aligned after frame (boosted in low light)
+        detection_frame = aligned_after
+        yolo_targets = detect_yolo_targets(model, detection_frame, yolo_confidence)
 
         # 4. Classify each changed region
         annotated_after = aligned_after.copy()
@@ -440,17 +480,24 @@ def main(
 
             # Pick distinct operational colors
             if label == "HUMAN":
-                color = COLOR_HUMAN_PEDESTRIAN if category == "PEDESTRIAN" else COLOR_HUMAN_VEHICLE
+                # Feature 2: Evaluate target against Virtual Tripwire TW-01
+                zone_verdict = tripwire.evaluate_target(region["bbox"], aligned_after.shape)
+                threat_level = zone_verdict.threat_level if category == "PEDESTRIAN" else ("HIGH" if zone_verdict.is_breach else "MEDIUM")
+                color = COLOR_HUMAN_PEDESTRIAN if zone_verdict.is_breach else COLOR_HUMAN_VEHICLE
                 thickness = 2
-                tag = f"HUMAN: {category} ({conf:.2f})"
+                tag = f"HUMAN: {category} ({conf:.2f}) [{zone_verdict.zone_name.split()[0]}]"
                 alert_entry = {
                     "frame": source_frame_index,
                     "timestamp_sec": round(time_sec, 2),
                     "label": label,
                     "category": category,
                     "confidence": round(conf, 3),
-                    "bbox": [x, y, w, h],
+                    "bbox": [int(x), int(y), int(w), int(h)],
                     "reason": reason,
+                    "is_breach": zone_verdict.is_breach,
+                    "zone": zone_verdict.zone_name,
+                    "penetration_depth_m": zone_verdict.penetration_depth_m,
+                    "approach_margin_m": zone_verdict.approach_margin_m,
                     "metrics": {
                         "area": round(region["area"], 1),
                         "solidity": round(region["solidity"], 3),
@@ -467,7 +514,6 @@ def main(
                 combined_crop = save_alert_snapshot(aligned_after, alert_entry, snapshot_file)
 
                 # Send live alert with snapshot to FastAPI & React Dashboard
-                threat_level = "CRITICAL" if category == "PEDESTRIAN" else "HIGH"
                 api_payload = {
                     "alert_id": f"ALT-2026-{source_frame_index:04d}-{x:03d}",
                     "camera_id": "CAM-01",
@@ -477,7 +523,7 @@ def main(
                     "category": category,
                     "confidence": float(round(conf, 3)),
                     "bbox": [int(x), int(y), int(w), int(h)],
-                    "zone": "Red Zone Alpha (Tripwire TW-01)",
+                    "zone": zone_verdict.zone_name,
                     "reason": reason,
                     "metrics": {
                         "area": float(round(region["area"], 1)),
@@ -487,12 +533,15 @@ def main(
                         "displacement": 14.2,
                         "frames_tracked": 6,
                         "yolo_match": yolo_match or ("person" if category == "PEDESTRIAN" else "vehicle"),
+                        "low_light_active": is_low_light,
+                        "mean_luminance": round(mean_lum, 1),
+                        "penetration_depth_m": zone_verdict.penetration_depth_m,
                     },
                     "xai_breakdown": {
                         "shape_analysis": f"Solidity {region['solidity']:.2f}, aspect ratio {region['aspect_ratio']:.2f} ({category})",
                         "motion_profile": "Sustained directional trajectory across aligned footage; wind oscillation rejected",
                         "frame_alignment": f"ORB homography: {matches} matches, {inliers} inliers — camera jitter compensated",
-                        "zone_intrusion": "Crossing surveillance boundary in mutual field of view",
+                        "zone_intrusion": zone_verdict.xai_explanation,
                         "environmental_verdict": f"CONFIRMED INTRUSION ({threat_level})"
                     },
                     "environmental_noise_filtered": False,
@@ -523,7 +572,7 @@ def main(
                         "shape_analysis": f"High fragmentation ({region['fragments']} blobs), low solidity ({region['solidity']:.2f})",
                         "motion_profile": "Cyclic oscillation signature characteristic of wind-induced tree movement",
                         "frame_alignment": "ORB alignment active",
-                        "zone_intrusion": "Non-threatening foliage movement",
+                        "zone_intrusion": "Non-threatening foliage movement outside perimeter",
                         "environmental_verdict": "FALSE ALARM SUPPRESSED (Natural motion filtered)"
                     },
                     "environmental_noise_filtered": True,
@@ -549,8 +598,12 @@ def main(
             if label == "HUMAN":
                 print(
                     f"⚠️ [ALERT] Frame {source_frame_index} ({time_sec:.2f}s) | "
-                    f"{label} [{category}] at ({x}, {y}, {w}, {h}) -> {reason}"
+                    f"{label} [{category}] at ({x}, {y}, {w}, {h}) -> {reason} [{alert_entry['zone']}]"
                 )
+
+        # Feature 2 HUD: Render Virtual Tripwire TW-01 on surveillance feed
+        has_active_breach = any(a.get("is_breach") for a in current_frame_alerts)
+        tripwire.draw_hud_tripwire(annotated_after, is_breached=has_active_breach)
 
         # 5. Build 3-Panel Display
         # Panel 1: Reference
@@ -573,10 +626,19 @@ def main(
 
         # Draw sleek top HUD
         time_sec = source_frame_index / before_fps
-        draw_hud_header(combined, source_frame_index, time_sec, len(current_frame_alerts), matches, inliers)
+        draw_hud_header(
+            combined,
+            source_frame_index,
+            time_sec,
+            len(current_frame_alerts),
+            matches,
+            inliers,
+            is_low_light=is_low_light,
+        )
 
         writer.write(combined)
         send_frame_to_stream(annotated_after, enable_api=enable_api)
+
 
         if preview:
             try:

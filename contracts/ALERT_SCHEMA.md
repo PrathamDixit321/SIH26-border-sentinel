@@ -19,6 +19,7 @@ This document defines the exact alert payload and API endpoint that the Computer
   "alert_id": "ALT-2026-9081",
   "timestamp": "2026-09-08T22:45:12+05:30",
   "camera_id": "CAM-01",
+  "input_mode": "RGB",
   "sector": "Sector 4 (North Ridge Fence)",
   "threat_level": "CRITICAL",
   "label": "HUMAN",
@@ -56,6 +57,7 @@ This document defines the exact alert payload and API endpoint that the Computer
 | `alert_id` | `string` | Unique identifier (e.g. `ALT-<YYYY>-<ID>`) |
 | `timestamp` | `string` | ISO 8601 formatted timestamp |
 | `camera_id` | `string` | Camera identifier (`CAM-01`, `CAM-02`, etc.) |
+| `input_mode` | `string` | `RGB` or `THERMAL`; defaults to `RGB` for existing clients |
 | `sector` | `string` | Border post / geographic zone |
 | `threat_level` | `string` | `CRITICAL`, `HIGH`, `MEDIUM`, or `LOW` |
 | `label` | `string` | Matches pipeline: `HUMAN`, `NATURAL`, or `STATIC` |
@@ -102,3 +104,26 @@ except Exception:
 The backend broadcasts new alerts instantly over WebSocket:
 - **WebSocket URL:** `ws://localhost:8000/ws/alerts`
 - Emits newly created alerts to connected clients within <10ms.
+
+## 5. Immediate Weapon Priority Event
+
+Mock or future weapon-detection adapters can post to `POST /api/weapon-alert`. This endpoint does not insert weapon events into the normal alert store; it immediately broadcasts the separate event below over the existing `/ws/alerts` connection. `timestamp`, `location`, `sector`, and `camera_id` are optional and preserved when provided.
+
+```json
+{
+  "type": "WEAPON_ALERT",
+  "data": {
+    "priority": "CRITICAL",
+    "weapon_detected": true,
+    "weapon_type": "rifle",
+    "weapon_confidence": 0.94,
+    "timestamp": "2026-10-04T10:30:00Z",
+    "sector": "Sector 7",
+    "camera_id": "CAM-03"
+  }
+}
+```
+
+When `weapon_detected` is `false`, the same event type carries a clear/reset payload with `priority: "NORMAL"`. The dashboard maps `WEAPON_ALERT.data` to its existing high-visibility weapon banner.
+
+Thermal-input demonstration uses the same alignment, change-detection, and classification path after input normalization. It is architecture-level support demonstrated with sample thermal imagery, not validation on live thermal-camera hardware.

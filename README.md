@@ -23,6 +23,10 @@ Border Sentinel AI continuously compares each new video frame against the most r
 5. **Adaptive Chaining** — each frame is compared against the *most recent* frame, not a fixed baseline, so gradual natural scene changes don't keep re-triggering alerts.
 6. **Dashboard** — live feed, alert history, snapshot, and a plain-language reason for every alert.
 
+### Thermal Input
+
+Run the same pipeline with `python pipeline.py <video> --input-mode THERMAL`. The input layer normalizes single-channel thermal-style frames to grayscale for the existing alignment and change-detection stages and creates a pseudo-color view for display. RGB remains the default. This is architecture-level thermal-input support demonstrated using sample thermal imagery, not validation on live thermal-camera hardware. The local QA sample source is [UBCSailbot's FLIR Lepton 16-bit image](https://github.com/UBCSailbot/obstacle-detection/blob/dev/resources/img/16bit/fishingBoat01.png); it is not bundled with this repository.
+
 ## 🌟 What Makes This Different
 
 Most existing CCTV-AI systems detect *that* something/someone is in frame. Border Sentinel AI reasons about *what changed since last time* and explicitly separates human-caused change from natural environmental change — reducing false alarms from wind/animals while catching genuine intrusions, using infrastructure that's already deployed.
@@ -65,15 +69,19 @@ SIH26-border-sentinel/
 │   ├── sample_alerts.json     # Golden Day-1 sample JSON contract
 │   ├── ALERT_SCHEMA.md        # Partner API documentation & copy-paste snippets
 │   └── mock_pipeline_feed.py  # Mock pipeline alert generator
+├── tripwire_engine.py         # Feature 2: Virtual Tripwire & Geofenced Security Zone Engine
 ├── step1_two_video_alignment.py # Stage 1: Robust homography & partial affine alignment (anti-blur/anti-zoom)
 ├── step2_change_detection.py    # Stage 2: Mutual field of view difference detection & live preview
 ├── step3_yolo_overlap.py        # Stage 3: YOLOv8 target detection + changed region overlap
 ├── step4_classifier_alerts.py   # Stage 4: Explainable Human vs Natural Classifier & Live C2 Alert Engine
-├── pipeline.py                # Core consecutive-frame CV pipeline with auto-API dispatch
-├── step1_yolo_test.py         # YOLOv8 test script
+├── pipeline.py                # Core consecutive-frame CV pipeline with auto-API dispatch & low-light hysteresis
+├── test_feature1_lowlight.py  # Feature 1 test suite: Schmitt trigger hysteresis validation
+├── test_feature2_tripwire.py  # Feature 2 test suite: Spatial breach & perimeter buffer tests
+├── run.bat                    # One-click Windows interactive launcher (all / web / cv / tests)
 ├── run_demo.ps1               # One-click unified full-stack launcher (Backend + Dashboard + CV Pipeline)
 ├── requirements.txt           # CV pipeline dependencies
 └── README.md
+
 ```
 
 ## 🚀 Quickstart & One-Click Launch

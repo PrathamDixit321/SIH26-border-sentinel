@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from .models import Alert, AlertCreate, AlertAcknowledge, SystemStats
+from .models import Alert, AlertCreate, AlertAcknowledge, SystemStats, WeaponDetectionInput
 from .storage import store
 from .streamer import mjpeg_stream, stream_generator
 
@@ -141,6 +141,31 @@ async def ingest_alert(payload: AlertCreate):
         "alert_id": saved_alert["alert_id"],
         "stored_at": saved_alert["timestamp"]
     }
+
+@app.post("/api/weapon-alert")
+async def ingest_weapon_detection(payload: WeaponDetectionInput):
+    """Adapt weapon detection output to an immediate, separate priority event."""
+    if payload.weapon_detected and (not payload.weapon_type or payload.weapon_confidence is None):
+        raise HTTPException(
+            status_code=422,
+            detail="weapon_type and weapon_confidence are required when a weapon is detected.",
+        )
+
+    event = {
+        "type": "WEAPON_ALERT",
+        "data": {
+            "priority": "CRITICAL" if payload.weapon_detected else "NORMAL",
+            "weapon_detected": payload.weapon_detected,
+            "weapon_type": payload.weapon_type,
+            "weapon_confidence": payload.weapon_confidence,
+            "timestamp": payload.timestamp or datetime.now().isoformat(),
+            "location": payload.location,
+            "sector": payload.sector,
+            "camera_id": payload.camera_id,
+        },
+    }
+    await manager.broadcast(event)
+    return {"status": "DISPATCHED", **event}
 
 @app.post("/api/alerts/{alert_id}/acknowledge")
 async def acknowledge_alert(alert_id: str, body: AlertAcknowledge):

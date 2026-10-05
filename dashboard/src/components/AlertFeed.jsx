@@ -1,9 +1,13 @@
 import React, { useState } from "react";
 import { AlertCircle, ShieldAlert, CheckCircle2, Eye, EyeOff, Search, Clock, Truck, User, Wind } from "lucide-react";
+import WeaponAlertBanner from "./WeaponAlertBanner";
 
-export default function AlertFeed({ alerts, selectedAlert, onSelectAlert, onAcknowledge }) {
+export default function AlertFeed({ alerts, weaponAlert, selectedAlert, onSelectAlert, onAcknowledge }) {
   const [filterTab, setFilterTab] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
+  const latestTelemetryAlert = alerts[0];
+  const lowLightActive = latestTelemetryAlert?.metrics?.low_light_active === true;
+  const thermalActive = latestTelemetryAlert?.input_mode === "THERMAL";
 
   const filteredAlerts = alerts.filter((alert) => {
     // Tab filtering
@@ -37,7 +41,30 @@ export default function AlertFeed({ alerts, selectedAlert, onSelectAlert, onAckn
 
   return (
     <div className="bg-[#0b131d]/90 border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col h-full max-h-[750px]">
-      
+
+      <WeaponAlertBanner alert={weaponAlert} />
+
+      <div className="grid grid-cols-2 gap-2 border-b border-slate-800 bg-[#090e15] px-3 py-2 font-mono text-[10px] sm:text-[11px]">
+        <div className="flex items-center justify-between gap-2 rounded border border-slate-800 bg-[#070b10] px-2.5 py-2">
+          <span className="text-slate-400">LOW-LIGHT ENHANCEMENT</span>
+          <span
+            data-testid="low-light-status"
+            className={`font-bold ${lowLightActive ? "text-emerald-400" : "text-slate-500"}`}
+          >
+            {lowLightActive ? "ACTIVE" : "INACTIVE"}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-2 rounded border border-slate-800 bg-[#070b10] px-2.5 py-2">
+          <span className="text-slate-400">THERMAL MODE</span>
+          <span
+            data-testid="thermal-status"
+            className={`font-bold ${thermalActive ? "text-cyan-300" : "text-slate-500"}`}
+          >
+            {thermalActive ? "ACTIVE" : "INACTIVE"}
+          </span>
+        </div>
+      </div>
+
       {/* 1. Header & Filter Tabs */}
       <div className="p-3 border-b border-slate-800 bg-[#080d14] space-y-2.5">
         <div className="flex items-center justify-between">
@@ -112,7 +139,7 @@ export default function AlertFeed({ alerts, selectedAlert, onSelectAlert, onAckn
             No incidents found for current filter.
           </div>
         ) : (
-          filteredAlerts.map((alert) => {
+          filteredAlerts.map((alert, index) => {
             const isSelected = selectedAlert?.alert_id === alert.alert_id;
             const isCritical = alert.threat_level === "CRITICAL";
             const isSuppressed = alert.environmental_noise_filtered;
@@ -120,7 +147,7 @@ export default function AlertFeed({ alerts, selectedAlert, onSelectAlert, onAckn
 
             return (
               <div
-                key={alert.alert_id}
+                key={alert.alert_id || `${alert.frame ?? "event"}-${index}`}
                 onClick={() => onSelectAlert(alert)}
                 className={`p-3 rounded-lg border transition cursor-pointer flex flex-col gap-2 ${
                   isSelected
