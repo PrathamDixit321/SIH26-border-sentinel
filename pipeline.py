@@ -10,6 +10,9 @@ Enhanced Border Sentinel CV Pipeline:
 
 import argparse
 from collections import deque
+from datetime import datetime
+import os
+
 import cv2
 import numpy as np
 
@@ -21,6 +24,24 @@ try:
 except (ImportError, Exception) as e:
     MODEL = None
     print(f"[INFO] Running in heuristic-only mode (YOLO unavailable: {e})")
+
+WEAPON_MODEL = None
+WEAPON_MODEL_PATHS = [
+    "yolov8s-weapon-finetuned.pt",
+    os.path.join("weights", "yolov8s-weapon-finetuned.pt"),
+    os.path.join(os.getcwd(), "yolov8s-weapon-finetuned.pt"),
+]
+for weapon_path in WEAPON_MODEL_PATHS:
+    if os.path.exists(weapon_path):
+        try:
+            WEAPON_MODEL = YOLO(weapon_path)
+            print(f"[INFO] Loaded weapon model from {weapon_path}")
+            break
+        except Exception as exc:
+            print(f"[WARN] Could not load weapon model from {weapon_path}: {exc}")
+
+if WEAPON_MODEL is None:
+    print("[INFO] Weapon detector is offline: no weight file found. Feature remains additive and safe to run without it.")
 
 # Allowed classes for surveillance alerts (COCO: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck)
 TARGET_CLASSES = {0: "person", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
@@ -60,6 +81,46 @@ def send_alert_to_api(payload, api_url="http://localhost:8000/api/alerts"):
         requests.post(api_url, json=payload, timeout=0.2)
     except Exception:
         pass
+
+
+def detect_weapon_objects(frame, confidence_threshold=0.25):
+    """Optional additive weapon pass that stays active only when a trained model is available."""
+    if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+        return []
+    if WEAPON_MODEL is None:
+        return []
+
+    try:
+        results = WEAPON_MODEL.predict(frame, verbose=False, conf=confidence_threshold)[0]
+        detections = []
+        if results.boxes is not None:
+            for box in results.boxes:
+                conf = float(box.conf[0]) if hasattr(box, "conf") and len(box.conf) > 0 else 0.0
+                if conf < confidence_threshold:
+                    continue
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                label = WEAPON_MODEL.names.get(int(box.cls[0]), "weapon") if hasattr(WEAPON_MODEL, "names") and box.cls is not None else "weapon"
+                detections.append({
+                    "label": str(label).lower().replace(" ", "_"),
+                    "conf": conf,
+                    "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                })
+        return detections
+    except Exception as exc:
+        print(f"[WARN] Weapon inference failed: {exc}")
+        return []
+
+
+def send_weapon_alert_to_api(payload, api_url="http://localhost:8000/api/weapon-alert"):
+    """Dispatch a separate, high-priority weapon event without affecting the normal alert stream."""
+    if not is_backend_online():
+        return False
+    try:
+        import requests
+        response = requests.post(api_url, json=payload, timeout=0.2)
+        return response.status_code == 200
+    except Exception:
+        return False
 
 
 def send_frame_to_stream(frame, stream_url="http://localhost:8000/api/stream/frame"):
@@ -492,6 +553,23 @@ def process_video(path, show_live=True, input_mode="RGB"):
                             "conf": conf,
                             "bbox": [x1, y1, x2, y2]
                         })
+
+        # 3b. Additive weapon detection pass. This is intentionally isolated and never alters the
+        # existing person/vehicle alert logic when no weapon weights are available.
+        detection_input = enhanced_bgr if input_mode == "THERMAL" or is_low_light else curr_frame
+        weapon_detections = detect_weapon_objects(detection_input)
+        for det in weapon_detections:
+            weapon_payload = {
+                "weapon_detected": True,
+                "weapon_type": det["label"],
+                "weapon_confidence": float(det["conf"]),
+                "timestamp": datetime.now().isoformat(),
+                "location": "Live frame analysis",
+                "sector": "Sector 4 (North Ridge)",
+                "camera_id": "CAM-01",
+            }
+            print(f"[WEAPON] {det['label']} confidence={det['conf']:.2f}")
+            send_weapon_alert_to_api(weapon_payload)
 
         # Visualization frame: display enhanced view in night mode so operator sees into shadows
         display_frame = (
